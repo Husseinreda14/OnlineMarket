@@ -96,7 +96,24 @@ async def SellerAuth(token: str = Depends(oauth2_scheme)):
         raise credentials_exception
     return seller_id
 
-
+async def BuyerAuth(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, config.SECRET_KEY, algorithms=[config.ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    user = await db["users"].find_one({"_id": user_id})
+    if user is None or  user["is_seller"]:
+        raise credentials_exception
+    return user_id
 
 @router.post("/registerAsSeller")
 async def register(request: Request):

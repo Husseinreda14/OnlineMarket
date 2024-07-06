@@ -3,13 +3,14 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, status, UploadFile, File
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
-from datetime import datetime
+from datetime import datetime, timedelta
 from auth import SellerAuth
 from models import Product
 from db import db
 import config
 import os
 from typing import List, Optional
+from apscheduler.schedulers.background import BackgroundScheduler
 
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -37,14 +38,16 @@ async def create_product(
         image_urls.append(unique_filename)  # Store only the filename
 
     product_dict = {
-        "_id": str(ObjectId()),  # Convert ObjectId to string
+        "_id": str(ObjectId()),  
         "seller_id": seller_id,
         "name": name,
         "description": description,
         "price": price,
         "quantity":quantity,
         "images": image_urls,
-        "created_at": datetime.utcnow()
+        "created_at": datetime.utcnow(),
+        "isDeleted": False,
+        "deleted_at": None,
     }
 
     await db["products"].insert_one(product_dict)
@@ -57,7 +60,7 @@ async def get_all_products(
     limit: int = Query(10, gt=0, le=100, description="Number of products to return per page"),
     sort_by_price: Optional[bool] = Query(None, description="Sort by price if True")
 ):
-    query = {}
+    query = {"isDeleted": False}
 
     # Search by name, description, or seller email
     if search:
@@ -67,6 +70,7 @@ async def get_all_products(
                 {"name": {"$regex": search, "$options": "i"}},
                 {"description": {"$regex": search, "$options": "i"}},
                 {"seller_id": {"$in": seller_ids}}
+
             ]
         }
 
@@ -101,6 +105,8 @@ async def get_all_products(
     
     return product_responses
 
+
+
 #retreives the seller listed products 
 @router.get("/getmineproducts")
 async def get_mine_products(
@@ -108,7 +114,7 @@ async def get_mine_products(
 ):
     seller_id = await SellerAuth(token)
     
-    query = {"seller_id": seller_id}
+    query = {"seller_id": seller_id, "isDeleted": False}
     
     products_cursor = db["products"].find(query)
     products = await products_cursor.to_list(length=None)
@@ -134,9 +140,10 @@ async def get_mine_products(
 
 
 
+
 @router.get("/GetProduct/{product_id}")
 async def get_product(product_id: str):
-    product = await db["products"].find_one({"_id": product_id})
+    product = await db["products"].find_one({"_id": product_id, "isDeleted": False})
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
@@ -172,7 +179,7 @@ async def update_product(
     token: str = Depends(oauth2_scheme)
 ):
     seller_id = await SellerAuth(token)
-    product = await db["products"].find_one({"_id": product_id, "seller_id": seller_id})
+    product = await db["products"].find_one({"_id": product_id, "seller_id": seller_id, "isDeleted": False})
     if not product:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this product")
 
@@ -217,9 +224,72 @@ async def delete_product(
     token: str = Depends(oauth2_scheme)
 ):
     seller_id = await SellerAuth(token)
-    product = await db["products"].find_one({"_id": product_id, "seller_id": seller_id})
+    product = await db["products"].find_one({"_id": product_id, "seller_id": seller_id, "isDeleted": False})
     if not product:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this product")
 
-    await db["products"].delete_one({"_id":product_id})
-    return {"message": "Product deleted successfully"}
+    await db["products"].update_one({"_id": product_id}, {"$set": {"isDeleted": True, "deleted_at": datetime.utcnow()}})
+    return {"message": "Product moved to bin successfully. You can restore it within 30 days."}
+
+
+
+#retreives the seller deleted products 
+@router.get("/getDeleted")
+async def get_deleted_products(
+    token: str = Depends(oauth2_scheme)
+):
+    seller_id = await SellerAuth(token)
+    
+    query = {"seller_id": seller_id, "isDeleted": True}
+    
+    products_cursor = db["products"].find(query)
+    products = await products_cursor.to_list(length=None)
+    if not products:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="You haven't deleted any products yet!")
+
+    product_responses = []
+    for product in products:
+        product_response = {
+            "id": str(product["_id"]),
+            "name": product["name"],
+            "description": product["description"],
+            "price": product["price"],
+            "quantity":product["quantity"],
+            "isAvailable": product["quantity"] > 0,
+            "images": [f"{config.API_URL}/uploads/productimages/{img}" for img in product["images"]],
+            "created_at": product["created_at"]
+        }
+        product_responses.append(product_response)
+    
+    return product_responses
+
+
+@router.put("/restore/{product_id}")
+async def restore_product(
+    product_id: str,
+    token: str = Depends(oauth2_scheme)
+):
+    seller_id = await SellerAuth(token)
+    product = await db["products"].find_one({"_id": product_id, "seller_id": seller_id, "isDeleted": True})
+    if not product:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to restore this product")
+
+    deleted_time = product["deleted_at"]
+    if deleted_time and (datetime.utcnow() - deleted_time) > timedelta(days=30):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot restore the product. The 30-day restoration period has expired.")
+
+    await db["products"].update_one({"_id": product_id}, {"$set": {"isDeleted": False, "deleted_at": None}})
+    return {"message": "Product restored successfully."}
+
+
+
+# Scheduler function to remove products that are deleted for more than 30 days( runs daily at the midnight)
+def remove_old_deleted_products():
+    cutoff_date = datetime.utcnow() - timedelta(days=30)
+    db["products"].delete_many({"isDeleted": True, "deleted_at": {"$lte": cutoff_date}})
+    print("Scheduler: Removed products deleted more than 30 days ago")
+
+# Initialize and start the scheduler
+scheduler = BackgroundScheduler()
+scheduler.add_job(remove_old_deleted_products, 'cron', hour=0, minute=0)
+scheduler.start()

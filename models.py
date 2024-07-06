@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, EmailStr
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 from bson import ObjectId
 from pydantic.json import pydantic_encoder
@@ -37,33 +37,12 @@ class Product(BaseModel):
     seller_id: str
     name: str
     description: str
-    quantity:int
+    quantity: int
     price: float
     images: List[str] = []
     created_at: datetime = Field(default_factory=datetime.utcnow)
-
-class Config:
-        populate_by_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
-        schema_extra = {
-            "example": {
-                "id": "60dbf46dcf1e9d96f6e40876",
-                "seller_id": "60dbf46dcf1e9d96f6e40876",
-                "seller_name": "seller@example.com",
-                "name": "Product Name",
-                "description": "Product Description",
-                "price": 99.99,
-                "images": ["/uploads/productimages/image1.jpg", "/uploads/productimages/image2.jpg"],
-                "created_at": "2021-06-30T00:00:00Z",
-            }
-        }
-
-
-
-class CartItem(BaseModel):
-    product_id: str
-    quantity: int
+    isDeleted: bool = False
+    deleted_at: Optional[datetime] = None
 
     class Config:
         populate_by_name = True
@@ -71,15 +50,23 @@ class CartItem(BaseModel):
         json_encoders = {ObjectId: str}
         schema_extra = {
             "example": {
-                "product_id": "60dbf46dcf1e9d96f6e40876",
-                "quantity": 2,
-            }
+                "id": "60dbf46dcf1e9d96f6e40876",
+                "seller_id": "60dbf46dcf1e9d96f6e40876",
+                "seller_email": "seller@example.com",
+                "name": "Product Name",
+                "description": "Product Description",
+                "price": 99.99,
+                "quantity": 10,
+                "images": ["/uploads/productimages/image1.jpg", "/uploads/productimages/image2.jpg"],
+                "created_at": "2021-06-30T00:00:00Z",
+                "isDeleted": False,
+                "deleted_at": None,            }
         }
-
 class ShoppingCart(BaseModel):
-    id: str = Field(default_factory=lambda: str(ObjectId()), alias="_id")
-    user_id: str
-    items: List[CartItem] = []
+    id:str = Field(default_factory=lambda: str(ObjectId()), alias="_id")
+    user_id: str = Field(..., description="The ID of the user")
+    product_id: str = Field(..., description="The ID of the product")
+    quantity: int
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -89,18 +76,19 @@ class ShoppingCart(BaseModel):
         json_encoders = {ObjectId: str}
         schema_extra = {
             "example": {
-                "id": "60dbf46dcf1e9d96f6e40876",
                 "user_id": "60dbf46dcf1e9d96f6e40876",
-                "items": [{"product_id": "60dbf46dcf1e9d96f6e40876", "quantity": 2}],
+                "product_id": "60dbf46dcf1e9d96f6e40876",
+                "quantity": 2,
                 "created_at": "2021-06-30T00:00:00Z",
                 "updated_at": "2021-06-30T00:00:00Z",
             }
         }
-
 class Order(BaseModel):
     id: str = Field(default_factory=lambda: str(ObjectId()), alias="_id")
+    seller_id:str
     user_id: str
-    products: List[CartItem]
+    payment_id:str
+    products: List[ShoppingCart]
     total_price: float
     status: str = "pending"
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -113,7 +101,9 @@ class Order(BaseModel):
         schema_extra = {
             "example": {
                 "id": "60dbf46dcf1e9d96f6e40876",
+                "seller_id":"60dbf46dcf1e9d96f6e40876",
                 "user_id": "60dbf46dcf1e9d96f6e40876",
+                "payment_id": "60dbf46dcf1e9d96f6e40876",
                 "products": [{"product_id": "60dbf46dcf1e9d96f6e40876", "quantity": 2}],
                 "total_price": 199.98,
                 "status": "pending",
@@ -121,6 +111,32 @@ class Order(BaseModel):
                 "updated_at": "2021-06-30T00:00:00Z",
             }
         }
+
+class Payment(BaseModel):
+    id: str = Field(default_factory=lambda: str(ObjectId()), alias="_id")
+    user_id: str
+    payment_id: str
+    payment_method:str
+    status: str = "pending"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        populate_by_name = True
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}
+        schema_extra = {
+            "example": {
+                "id": "60dbf46dcf1e9d96f6e40876",
+                "user_id": "60dbf46dcf1e9d96f6e40876",
+                "payment_id": "pi_1IeYQ2LM7NV5XtZzlw8Tx6KJ",
+                "order_id": "60dbf46dcf1e9d96f6e40876",
+                "status": "pending",
+                "created_at": "2021-06-30T00:00:00Z",
+                "updated_at": "2021-06-30T00:00:00Z",
+            }
+        }
+
 
 class Token(BaseModel):
     access_token: str
