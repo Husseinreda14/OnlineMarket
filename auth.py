@@ -6,7 +6,7 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from pydantic import BaseModel, EmailStr
-from models import User, Token
+from models import BlacklistedToken, User
 from db import db
 import config
 from sideFunctions import send_reset_password_email, send_verification_email
@@ -62,10 +62,10 @@ def get_password_hash(password):
 
     
 async def blacklist_token(token: str):
-    blacklisted_token = {
-        "token": token,
-        "blacklisted_at": datetime.utcnow()
-    }
+    blacklisted_token = BlacklistedToken(
+        token= token,
+        blacklisted_at=datetime.utcnow()
+    )
     await db["blacklisted_tokens"].insert_one(blacklisted_token)
 
 async def is_token_blacklisted(token: str) -> bool:
@@ -115,6 +115,30 @@ async def BuyerAuth(token: str = Depends(oauth2_scheme)):
         raise credentials_exception
     return user_id
 
+
+
+async def UserAuth(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, config.SECRET_KEY, algorithms=[config.ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    user = await db["users"].find_one({"_id": user_id})
+    if user is None:
+        raise credentials_exception
+    print(user)
+    return user
+
+
+
 @router.post("/registerAsSeller")
 async def register(request: Request):
     body = await request.json()
@@ -135,14 +159,14 @@ async def register(request: Request):
         )
     
     hashed_password = get_password_hash(password)
-    user_dict = {
-        "email": email,
-        "hashed_password": hashed_password,
-        "_id": str(ObjectId()),
-        "is_seller" : True,
-        "verified": False,  # Add verified attribute
-        "created_at": datetime.utcnow()
-    }
+    user_dict = User(
+        email=email,
+        hashed_password=hashed_password,
+        id=str(ObjectId()), 
+        is_seller=True,
+        verified=False,
+        created_at=datetime.utcnow()
+    )
 
     # Create a verification token
     token_data = {

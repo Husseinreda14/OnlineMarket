@@ -65,17 +65,51 @@ async def add_to_cart(
 @router.get("/getmine")
 async def get_cart(token: str = Depends(oauth2_scheme)):
     try:
-        
         user_id = await BuyerAuth(token)
-        
-        cart_items = await db["shopping_carts"].find({"user_id":user_id}).to_list(length=None)
+
+        pipeline = [
+            {"$match": {"user_id": user_id}},
+            {
+                "$lookup": {
+                    "from": "products",
+                    "localField": "product_id",
+                    "foreignField": "_id",
+                    "as": "product_details"
+                }
+            },
+            {"$unwind": "$product_details"},
+            {
+                "$lookup": {
+                    "from": "users",
+                    "localField": "product_details.seller_id",
+                    "foreignField": "_id",
+                    "as": "seller_details"
+                }
+            },
+            {"$unwind": "$seller_details"},
+            {
+                "$project": {
+                    "product_id": "$product_details._id",
+                    "product_name": "$product_details.name",
+                    "seller_email": "$seller_details.email",
+                    "quantity": 1,
+                    "created_at": 1,
+                    "updated_at": 1
+                }
+            }
+        ]
+
+        cart_items = await db["shopping_carts"].aggregate(pipeline).to_list(length=None)
+
         if not cart_items:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cart not found")
+        
         return cart_items
     
     except Exception as e:
         print(e)
         raise e
+
 
 
 @router.put("/editCart")

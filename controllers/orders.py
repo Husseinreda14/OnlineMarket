@@ -2,7 +2,7 @@ from fastapi.responses import HTMLResponse
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from fastapi.security import OAuth2PasswordBearer
 from jinja2 import Template
-from auth import BuyerAuth
+from auth import BuyerAuth, SellerAuth, UserAuth
 from models import ShoppingCart, Product, Order, Payment, User
 from db import db
 import config
@@ -115,6 +115,93 @@ async def create_payment(
 
 
 
+@router.get("/gemyOrders")
+async def get_my_orders(
+    token: str = Depends(oauth2_scheme)
+):
+    user = await UserAuth(token)
+    query = {"status": "confirmed"}
+    if user['is_seller']:
+        query["seller_id"] = user['_id']
+    else:
+        query["user_id"] = user['_id']
+
+    # Use aggregation to join orders with products
+    pipeline = [
+        {"$match": query},
+        {
+            "$lookup": {
+                "from": "products",
+                "localField": "products.product_id",
+                "foreignField": "_id",
+                "as": "product_details"
+            }
+        },
+        {
+            "$project": {
+                "_id": 1,
+                "user_id": 1,
+                "total_price": 1,
+                "status": 1,
+                "created_at": 1,
+                "updated_at": 1,
+                "products": {
+                    "$map": {
+                        "input": "$products",
+                        "as": "item",
+                        "in": {
+                            "product_id": "$$item.product_id",
+                            "quantity": "$$item.quantity",
+                            "product_details": {
+                                "$arrayElemAt": [
+                                    {
+                                        "$filter": {
+                                            "input": "$product_details",
+                                            "as": "product",
+                                            "cond": {
+                                                "$eq": ["$$product._id", "$$item.product_id"]
+                                            }
+                                        }
+                                    },
+                                    0
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+
+    orders = await db["orders"].aggregate(pipeline).to_list(length=None)
+    
+    if not orders:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No orders found")
+
+    # Construct result
+    result = []
+    for order in orders:
+        order_data = {
+            "order_id": order["_id"],
+            "user_id": order["user_id"],
+            "total_price": order["total_price"],
+            "status": order["status"],
+            "created_at": order["created_at"],
+            "updated_at": order["updated_at"],
+            "products": []
+        }
+        for item in order["products"]:
+            product = item["product_details"]
+            if product:
+                order_data["products"].append({
+                    "product_id": product["_id"],
+                    "product_name": product["name"],
+                    "quantity": item["quantity"],
+                    "price": product["price"]
+                })
+        result.append(order_data)
+    
+    return result
 @router.get("/payment_form")
 async def serve_payment_form(
     client_secret: str = Query(...),
@@ -151,6 +238,8 @@ async def get_total_order_items(payment_id: str, user_email: str):
         send_seller_notification_email(seller["email"], user_email, items, seller_total)
         total_order_items.extend(items)
     return total_order_items, total_price  # Return both total_order_items and total_price
+
+
 
 @router.get("/confirm-payment", response_class=HTMLResponse)
 async def confirm_payment(
@@ -190,7 +279,7 @@ async def confirm_payment(
                 send_order_confirmation_email(user["email"], total_order_items, total_price)
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payment not completed")
-
+        await db["shopping_carts"].delete_many({"user_id":user_id})    
         html_template = '''
         <!DOCTYPE html>
         <html>
