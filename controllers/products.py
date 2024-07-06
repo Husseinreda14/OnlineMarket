@@ -19,6 +19,7 @@ async def create_product(
     name: str = Form(...),
     description: str = Form(...),
     price: float = Form(...),
+    quantity:int=Form(...),
     files: List[UploadFile] = File(...),
     token: str = Depends(oauth2_scheme)
 ):
@@ -41,6 +42,7 @@ async def create_product(
         "name": name,
         "description": description,
         "price": price,
+        "quantity":quantity,
         "images": image_urls,
         "created_at": datetime.utcnow()
     }
@@ -91,12 +93,45 @@ async def get_all_products(
             "name": product["name"],
             "description": product["description"],
             "price": product["price"],
+            "quantity":product["quantity"],
             "images": [f"{config.API_URL}/uploads/productimages/{img}" for img in product["images"]],
             "created_at": product["created_at"]
         }
         product_responses.append(product_response)
     
     return product_responses
+
+#retreives the seller listed products 
+@router.get("/getmineproducts")
+async def get_mine_products(
+    token: str = Depends(oauth2_scheme)
+):
+    seller_id = await SellerAuth(token)
+    
+    query = {"seller_id": seller_id}
+    
+    products_cursor = db["products"].find(query)
+    products = await products_cursor.to_list(length=None)
+    if not products:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="You haven't added any products yet!")
+
+    product_responses = []
+    for product in products:
+        product_response = {
+            "id": str(product["_id"]),
+            "name": product["name"],
+            "description": product["description"],
+            "price": product["price"],
+            "quantity":product["quantity"],
+            "isAvailable": product["quantity"] > 0,
+            "images": [f"{config.API_URL}/uploads/productimages/{img}" for img in product["images"]],
+            "created_at": product["created_at"]
+        }
+        product_responses.append(product_response)
+    
+    return product_responses
+
+
 
 
 @router.get("/GetProduct/{product_id}")
@@ -118,6 +153,8 @@ async def get_product(product_id: str):
         "name": product["name"],
         "description": product["description"],
         "price": product["price"],
+        "quantity":product["quantity"],
+        "isAvailable": product["quantity"] > 0,
         "images": [f"{config.API_URL}/uploads/productimages/{img}" for img in product["images"]],
         "created_at": product["created_at"]
     }
@@ -130,7 +167,8 @@ async def update_product(
     name: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
     price: Optional[float] = Form(None),
-      files: Optional[List[UploadFile]] = File(None),
+    quantity:Optional[int]=Form(None),
+    files: Optional[List[UploadFile]] = File(None),
     token: str = Depends(oauth2_scheme)
 ):
     seller_id = await SellerAuth(token)
@@ -145,6 +183,8 @@ async def update_product(
         update_data["description"] = description
     if price is not None:
         update_data["price"] = price
+    if quantity is not None:
+        update_data["quantity"] = quantity
 
     if files:
         image_urls = []
@@ -165,6 +205,8 @@ async def update_product(
         "name": updated_product["name"],
         "description": updated_product["description"],
         "price": updated_product["price"],
+        "quantity":updated_product["quantity"],
+        "isAvailable": updated_product["quantity"] > 0,
         "images": [f"{config.API_URL}/uploads/productimages/{img}" for img in updated_product["images"]],
         "created_at": updated_product["created_at"]
     }
