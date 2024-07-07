@@ -23,7 +23,7 @@ def send_verification_email(email: str, token: str):
          <p>Note this Link is one time access!</p>
         <br>
         <p>Best regards,</p>
-        <p>Hussein Reda</p>
+        <p>E-Market Shop</p>
     </body>
     </html>
     '''
@@ -63,7 +63,7 @@ def send_reset_password_email(email: str, token: str):
         <p>Note this Link is one time access!</p>
         <br>
         <p>Best regards,</p>
-        <p>Hussein Reda</p>
+        <p>E-Market Shop</p>
     </body>
     </html>
     '''
@@ -102,7 +102,7 @@ def send_order_confirmation_email(email: str, items: List[dict], total_price: fl
         <p>Total: ${total_price}</p>
         <br>
         <p>Best regards,</p>
-        <p>Hussein Reda</p>
+        <p>E-Market Shop</p>
     </body>
     </html>
     '''
@@ -161,6 +161,41 @@ def send_seller_notification_email(email: str,buyer_email ,items: List[dict], to
     session.quit()
     print('Seller notification email sent')
 
+
+def send_delivery_notification_email(to_email: str, seller_email: str):
+    sender_address = config.EMAIL
+    sender_password = config.PASSWORD
+    receiver_address = to_email
+
+    mail_content = f'''
+    <html>
+    <body>
+        <h2>Your Order Has Been Processed</h2>
+        <p>Dear Customer,</p>
+        <p>Your order has been processed by Aramex. You should receive a call or SMS from them within 3 business days.</p>
+        <p>Thank you for shopping with us!</p>
+        <br>
+        <p>Best regards,</p>
+       <p>E-Market Shop</p>
+    </body>
+    </html>
+    '''
+
+    # Setup the MIME
+    message = MIMEMultipart()
+    message['From'] = f'MarketShop <{sender_address}>'
+    message['To'] = receiver_address
+    message['Subject'] = f'On Behalf of {seller_email}'
+    message.attach(MIMEText(mail_content, 'html'))
+
+    # Create SMTP session for sending the mail
+    session = smtplib.SMTP('smtp.gmail.com', 587)  # use gmail with port
+    session.starttls()  # enable security
+    session.login(sender_address, sender_password)  # login with mail_id and password
+    text = message.as_string()
+    session.sendmail(sender_address, receiver_address, text)
+    session.quit()
+    print('Delivery notification email sent')
 def get_payment_form_html(client_secret: str, success_url: str, stripe_public_key: str) -> str:
     html_template = '''
     <!DOCTYPE html>

@@ -71,17 +71,16 @@ async def create_product(
             "price": product_dict["price"],
             "quantity": product_dict["quantity"],
             "isAvailable": product_dict["quantity"] > 0,
-            "images": [f"{config.API_URL}/uploads/productimages/{img}" for img in product_dict["images"]],
+            "images": [f"{config.PRODUCT_UPLOAD_PATH}/{img}" for img in product_dict["images"]],
             "created_at": product_dict["created_at"].isoformat()
         }
 
         return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Product Created Successfully!", "product": product_response})
 
-    except HTTPException as e:
-        return e
-    except Exception as e:
-        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"message": "An error occurred while creating the product.", "error": str(e)})
 
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
 
 @router.put("/update/{product_id}")
 async def update_product(
@@ -93,70 +92,74 @@ async def update_product(
     files: List[UploadFile] = File(None),
     token: str = Depends(oauth2_scheme)
 ):
-    async with await db.client.start_session() as s:
-        async with s.start_transaction():
-            try:
-                seller_id = await SellerAuth(token)
-                
-                product = await db["products"].find_one({"_id": product_id, "isDeleted": False}, session=s)
-                if not product:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product Not Found.")
-                if product["seller_id"] != seller_id:
-                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this product.")
-                if not files or len(files) < 1:
-                    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one image file is required.")
+    try:
+        
+        async with await db.client.start_session() as s:
+            async with s.start_transaction():
+                try:
+                    seller_id = await SellerAuth(token)
+                    
+                    product = await db["products"].find_one({"_id": product_id, "isDeleted": False}, session=s)
+                    if not product:
+                        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product Not Found.")
+                    if product["seller_id"] != seller_id:
+                        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this product.")
+                    if not files or len(files) < 1:
+                        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one image file is required.")
 
-                update_data = {}
-                if name:
-                    update_data["name"] = name
-                if description:
-                    update_data["description"] = description
-                if price is not None:
-                    update_data["price"] = price
-                if quantity is not None:
-                    update_data["quantity"] = quantity
+                    update_data = {}
+                    if name:
+                        update_data["name"] = name
+                    if description:
+                        update_data["description"] = description
+                    if price is not None:
+                        update_data["price"] = price
+                    if quantity is not None:
+                        update_data["quantity"] = quantity
 
-                if files is None:
-                    return
+                    if files is None:
+                        return
 
-                if files:
-                    image_urls = []
-                    for file in files:
-                        file_extension = os.path.splitext(file.filename)[1]
-                        unique_filename = f"{uuid.uuid4()}{file_extension}"
-                        file_path = os.path.join("uploads", "productimages", unique_filename)
-                        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                        with open(file_path, "wb") as buffer:
-                            buffer.write(await file.read())
-                        image_urls.append(unique_filename)  # Store only the filename
-                    update_data["images"] = image_urls
+                    if files:
+                        image_urls = []
+                        for file in files:
+                            file_extension = os.path.splitext(file.filename)[1]
+                            unique_filename = f"{uuid.uuid4()}{file_extension}"
+                            file_path = os.path.join("uploads", "productimages", unique_filename)
+                            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                            with open(file_path, "wb") as buffer:
+                                buffer.write(await file.read())
+                            image_urls.append(unique_filename)  # Store only the filename
+                        update_data["images"] = image_urls
 
-                updated_product = await db["products"].find_one_and_update(
-                    {"_id": product_id},
-                    {"$set": update_data},
-                    return_document=True,
-                    session=s
-                )
+                    updated_product = await db["products"].find_one_and_update(
+                        {"_id": product_id},
+                        {"$set": update_data},
+                        return_document=True,
+                        session=s
+                    )
 
-                if not updated_product:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not authorized to update this product or product not found")
+                    if not updated_product:
+                        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not authorized to update this product or product not found")
 
-                return {
-                    "id": str(updated_product["_id"]),
-                    "name": updated_product["name"],
-                    "description": updated_product["description"],
-                    "price": updated_product["price"],
-                    "quantity": updated_product["quantity"],
-                    "isAvailable": updated_product["quantity"] > 0,
-                    "images": [f"{config.API_URL}/uploads/productimages/{img}" for img in updated_product["images"]],
-                    "created_at": updated_product["created_at"]
-                }
+                    return {
+                        "id": str(updated_product["_id"]),
+                        "name": updated_product["name"],
+                        "description": updated_product["description"],
+                        "price": updated_product["price"],
+                        "quantity": updated_product["quantity"],
+                        "isAvailable": updated_product["quantity"] > 0,
+                        "images": [f"{config.PRODUCT_UPLOAD_PATH}/{img}" for img in updated_product["images"]],
+                        "created_at": updated_product["created_at"]
+                    }
 
-            except HTTPException as e:
-                raise e
-            except Exception as e:
-                print(e)
-                return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"message": "An error occurred while updating the product.", "error": str(e)})
+                except Exception as e:
+                    print(e)
+                    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
+    except Exception as e:
+        await s.abort_transaction()
+        print(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
 
 
 
@@ -216,7 +219,7 @@ async def get_all_products(
             return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No products found")
 
         for product in products:
-            product["images"] = [f"{config.API_URL}/uploads/productimages/{img}" for img in product["images"]]
+            product["images"] = [f"{config.PRODUCT_UPLOAD_PATH}/{img}" for img in product["images"]]
             product["id"] = str(product["id"])
 
         return products
@@ -248,7 +251,7 @@ async def get_mine_products(
                 "price": product["price"],
                 "quantity": product["quantity"],
                 "isAvailable": product["quantity"] > 0,
-                "images": [f"{config.API_URL}/uploads/productimages/{img}" for img in product["images"]],
+                "images": [f"{config.PRODUCT_UPLOAD_PATH}/{img}" for img in product["images"]],
                 "created_at": product["created_at"]
             }
             product_responses.append(product_response)
@@ -295,7 +298,7 @@ async def get_product(product_id: str):
             return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
         product = product[0]
-        product["images"] = [f"{config.API_URL}/uploads/productimages/{img}" for img in product["images"]]
+        product["images"] = [f"{config.PRODUCT_UPLOAD_PATH}/{img}" for img in product["images"]]
 
         return product
 
@@ -303,65 +306,79 @@ async def get_product(product_id: str):
         print(e)
         return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
- 
+
+
+
 @router.delete("/delete/{product_id}")
 async def delete_product(
     product_id: str,
     token: str = Depends(oauth2_scheme)
 ):
-    async with await db.client.start_session() as s:
-        async with s.start_transaction():
-            try:
-                seller_id = await SellerAuth(token)
-                product = await db["products"].find_one({"_id": product_id, "seller_id": seller_id, "isDeleted": False}, session=s)
-                
-                if not product:
-                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this product")
+    try:
+        
+        async with await db.client.start_session() as s:
+            async with s.start_transaction():
+                try:
+                    seller_id = await SellerAuth(token)
+                    product = await db["products"].find_one({"_id": product_id, "seller_id": seller_id, "isDeleted": False}, session=s)
+                    
+                    if not product:
+                        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this product")
 
-                await db["products"].update_one(
-                    {"_id": product_id},
-                    {"$set": {"isDeleted": True, "deleted_at": datetime.utcnow()}},
-                    session=s
-                )
-                await db["shopping_carts"].delete_many({"product_id": product_id}, session=s)
+                    await db["products"].update_one(
+                        {"_id": product_id},
+                        {"$set": {"isDeleted": True, "deleted_at": datetime.utcnow()}},
+                        session=s
+                    )
+                    await db["shopping_carts"].delete_many({"product_id": product_id}, session=s)
+                    
+                    return {"message": "Product moved to bin successfully. You can restore it within 30 days."}
                 
-                return {"message": "Product moved to bin successfully. You can restore it within 30 days."}
-            
-            except HTTPException as e:
-                raise e
-            except Exception as e:
-                print(e)
-                await s.abort_transaction()
-                return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"message": "An error occurred while deleting the product.", "error": str(e)})
+
+                except Exception as e:
+                    print(e)
+                    await s.abort_transaction()
+                    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
+    except Exception as e:
+        await s.abort_transaction()
+        print(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
+
 
 #retreives the seller deleted products 
 @router.get("/getDeleted")
 async def get_deleted_products(
     token: str = Depends(oauth2_scheme)
 ):
-    seller_id = await SellerAuth(token)
-    
-    query = {"seller_id": seller_id, "isDeleted": True}
-    
-    products = await db["products"].find(query).to_list(length=None)
-    if not products:
-        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="You haven't deleted any products yet!")
+    try:
+            
+        seller_id = await SellerAuth(token)
+        
+        query = {"seller_id": seller_id, "isDeleted": True}
+        
+        products = await db["products"].find(query).to_list(length=None)
+        if not products:
+            return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="You haven't deleted any products yet!")
 
-    product_responses = []
-    for product in products:
-        product_response = {
-            "id": str(product["_id"]),
-            "name": product["name"],
-            "description": product["description"],
-            "price": product["price"],
-            "quantity":product["quantity"],
-            "isAvailable": product["quantity"] > 0,
-            "images": [f"{config.API_URL}/uploads/productimages/{img}" for img in product["images"]],
-            "created_at": product["created_at"]
-        }
-        product_responses.append(product_response)
-    
-    return product_responses
+        product_responses = []
+        for product in products:
+            product_response = {
+                "id": str(product["_id"]),
+                "name": product["name"],
+                "description": product["description"],
+                "price": product["price"],
+                "quantity":product["quantity"],
+                "isAvailable": product["quantity"] > 0,
+                "images": [f"{config.PRODUCT_UPLOAD_PATH}/{img}" for img in product["images"]],
+                "created_at": product["created_at"]
+            }
+            product_responses.append(product_response)
+        
+        return product_responses
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
+
 
 
 @router.put("/restore/{product_id}")
@@ -369,25 +386,36 @@ async def restore_product(
     product_id: str,
     token: str = Depends(oauth2_scheme)
 ):
-    seller_id = await SellerAuth(token)
-    product = await db["products"].find_one({"_id": product_id, "seller_id": seller_id, "isDeleted": True})
-    if not product:
-        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to restore this product")
+    try:
+            
+        seller_id = await SellerAuth(token)
+        product = await db["products"].find_one({"_id": product_id, "seller_id": seller_id, "isDeleted": True})
+        if not product:
+            return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to restore this product")
 
-    deleted_time = product["deleted_at"]
-    if deleted_time and (datetime.utcnow() - deleted_time) > timedelta(days=30):
-        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot restore the product. The 30-day restoration period has expired.")
+        deleted_time = product["deleted_at"]
+        if deleted_time and (datetime.utcnow() - deleted_time) > timedelta(days=30):
+            return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot restore the product. The 30-day restoration period has expired.")
 
-    await db["products"].update_one({"_id": product_id}, {"$set": {"isDeleted": False, "deleted_at": None}})
-    return {"message": "Product restored successfully."}
+        await db["products"].update_one({"_id": product_id}, {"$set": {"isDeleted": False, "deleted_at": None}})
+        return {"message": "Product restored successfully."}
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
+
 
 
 
 # Scheduler function to remove products that are deleted for more than 30 days( runs daily at the midnight)
 def remove_old_deleted_products():
-    cutoff_date = datetime.utcnow() - timedelta(days=30)
-    db["products"].delete_many({"isDeleted": True, "deleted_at": {"$lte": cutoff_date}})
-    print("Scheduler: Removed products deleted more than 30 days ago")
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=30)
+        db["products"].delete_many({"isDeleted": True, "deleted_at": {"$lte": cutoff_date}})
+        print("Scheduler: Removed products deleted more than 30 days ago")
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
+
 
 # Initialize and start the scheduler
 scheduler = BackgroundScheduler()
