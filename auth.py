@@ -38,7 +38,7 @@ async def authenticate_user(email: str, password: str):
     user = await get_user_by_email(email)
     if not user:
         return False
-    if not verify_password(password, user.hashed_password) or user.verified == False:
+    if not verify_password(password, user.hashed_password):
         return False
     return user
 
@@ -60,7 +60,7 @@ async def blacklist_token(token: str):
         token=token,
         blacklisted_at=datetime.utcnow()
     )
-    await db["blacklisted_tokens"].insert_one(blacklisted_token)
+    await db["blacklisted_tokens"].insert_one(blacklisted_token.dict(by_alias=True))
 
 async def is_token_blacklisted(token: str) -> bool:
     token_doc = await db["blacklisted_tokens"].find_one({"token": token})
@@ -124,7 +124,6 @@ async def UserAuth(token: str = Depends(oauth2_scheme)):
         raise credentials_exception
     return user
 
-# Helper function to log actions
 async def log_action(action: str, message: str, success: bool):
     log = Log(action=action, message=message, success=success)
     await db["logs"].insert_one(log.dict(by_alias=True))
@@ -217,7 +216,8 @@ async def verify_email(token: str):
     except Exception as e:
         await log_action("verify_email", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
-
+    
+    
 @router.post("/login")
 async def login_for_access_token(request: Request):
     try:
@@ -228,9 +228,22 @@ async def login_for_access_token(request: Request):
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password, or email not verified",
+                detail="Incorrect email or password",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        if  user.verified==False:
+            # Create a verification token
+            token_data = {
+                "email": email,
+                "exp": datetime.utcnow() + timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES)  # token expires in 24 hours
+            }
+            token = jwt.encode(token_data, config.SECRET_KEY, algorithm=config.ALGORITHM)
+
+            # Send verification email
+            send_verification_email(email, token)
+            await log_action("login", f"User {email} was sent an email to verify his identity", True)
+            return {"message": f"Welcome Back! We've sent a verification link, please check your mail."}
+            
         access_token_expires = timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = await create_access_token(
             data={"sub": user.id, "isSeller": user.is_seller}, expires_delta=access_token_expires
