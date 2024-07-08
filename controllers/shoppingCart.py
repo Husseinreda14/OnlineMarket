@@ -3,8 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, Form
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
-from auth import BuyerAuth
-from models import ShoppingCart, Product
+from auth import  BuyerAuth
+from models import ShoppingCart, Product, Log
 from db import db
 import config
 from typing import List, Optional
@@ -12,6 +12,10 @@ from typing import List, Optional
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
+# Helper function to log actions
+async def log_action(action: str, message: str, success: bool):
+    log = Log(action=action, message=message, success=success)
+    await db["logs"].insert_one(log.dict(by_alias=True))
 
 @router.post("/create")
 async def add_to_cart(
@@ -51,15 +55,15 @@ async def add_to_cart(
                 else:
                     return {"message": "Product already added before."}
 
-
+        await log_action("add_to_cart", f"Product {product_id} added to cart by user {user_id}", True)
         return {"message": "Product added to cart successfully"}
 
+    except HTTPException as http_err:
+        await log_action("add_to_cart", http_err.detail, False)
+        raise http_err
     except Exception as e:
-        print(e)
+        await log_action("add_to_cart", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
-
-
-
 
 @router.get("/getmine")
 async def get_cart(token: str = Depends(oauth2_scheme)):
@@ -102,14 +106,16 @@ async def get_cart(token: str = Depends(oauth2_scheme)):
 
         if not cart_items:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cart not found")
-        
+
+        await log_action("get_cart", f"Cart retrieved for user {user_id}", True)
         return cart_items
-    
+
+    except HTTPException as http_err:
+        await log_action("get_cart", http_err.detail, False)
+        raise http_err
     except Exception as e:
-        print(e)
-        raise e
-
-
+        await log_action("get_cart", str(e), False)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
 
 @router.put("/editCart")
 async def update_cart(
@@ -117,7 +123,6 @@ async def update_cart(
     token: str = Depends(oauth2_scheme)
 ):
     try:
-        
         user_id = await BuyerAuth(token)
         body = await request.json()
         product_id = body.get("product_id")
@@ -131,8 +136,8 @@ async def update_cart(
                 cart_item = await db["shopping_carts"].find_one({"user_id": user_id, "product_id": product_id}, session=s)
                 if not cart_item:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found in cart")
-                
-                product = await db["products"].find_one({"_id":product_id, "isDeleted": False}, session=s)
+
+                product = await db["products"].find_one({"_id": product_id, "isDeleted": False}, session=s)
                 if not product:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
@@ -156,14 +161,15 @@ async def update_cart(
                     session=s
                 )
 
+        await log_action("update_cart", f"Cart item {product_id} updated by user {user_id}", True)
         return {"message": "Cart updated successfully"}
 
+    except HTTPException as http_err:
+        await log_action("update_cart", http_err.detail, False)
+        raise http_err
     except Exception as e:
-        await s.abort_transaction()
-        print(e)
+        await log_action("update_cart", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
-
-
 
 @router.delete("/removeCart/{product_id}")
 async def remove_from_cart(
@@ -171,7 +177,6 @@ async def remove_from_cart(
     token: str = Depends(oauth2_scheme)
 ):
     try:
-            
         user_id = await BuyerAuth(token)
         async with await db.client.start_session() as s:
             async with s.start_transaction():
@@ -185,7 +190,7 @@ async def remove_from_cart(
 
                 # Restore the product quantity
                 await db["products"].update_one(
-                    {"_id":product_id},
+                    {"_id": product_id},
                     {"$inc": {"quantity": cart_item["quantity"]}},
                     session=s
                 )
@@ -193,9 +198,12 @@ async def remove_from_cart(
                 # Remove the cart item
                 await db["shopping_carts"].delete_one({"_id": cart_item["_id"]}, session=s)
 
+        await log_action("remove_from_cart", f"Product {product_id} removed from cart by user {user_id}", True)
         return {"message": "Product removed from cart successfully"}
 
+    except HTTPException as http_err:
+        await log_action("remove_from_cart", http_err.detail, False)
+        raise http_err
     except Exception as e:
-        await s.abort_transaction()
-        print(e)
+        await log_action("remove_from_cart", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")

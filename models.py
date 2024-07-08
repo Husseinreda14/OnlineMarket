@@ -58,3 +58,11 @@ class BlacklistedToken(BaseModel):
     id: str = Field(default_factory=lambda: str(ObjectId()), alias="_id")
     token: str
     blacklisted_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Log(BaseModel):
+    id: str = Field(default_factory=lambda: str(ObjectId()), alias="_id")
+    action: str
+    message: str
+    success: bool
+    timestamp: datetime = Field(default_factory=datetime.utcnow)

@@ -6,7 +6,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from auth import SellerAuth
-from models import Product
+from models import Product, Log
 from db import db
 import config
 import os
@@ -15,6 +15,13 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# Helper function to log actions
+async def log_action(action: str, message: str, success: bool):
+    log = Log(action=action, message=message, success=success)
+    await db["logs"].insert_one(log.dict(by_alias=True))
+
+
 
 
 @router.post("/create")
@@ -29,11 +36,11 @@ async def create_product(
     try:
         # Validate input values
         if not name or not description or not price:
-            return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name, price, and description  are required.")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name, price, and description are required.")
         if quantity < 1 or price < 1:
-            return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Quantity or Price must be at least 1.")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Quantity or Price must be at least 1.")
         if not files or len(files) < 1:
-            return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one image file is required.")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one image file is required.")
 
         seller_id = await SellerAuth(token)
 
@@ -75,11 +82,14 @@ async def create_product(
             "created_at": product_dict["created_at"].isoformat()
         }
 
+        await log_action("create_product", f"Product created by seller {seller_id}", True)
         return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Product Created Successfully!", "product": product_response})
 
-
+    except HTTPException as http_err:
+        await log_action("create_product", http_err.detail, False)
+        raise http_err
     except Exception as e:
-        print(e)
+        await log_action("create_product", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
 
 @router.put("/update/{product_id}")
@@ -93,7 +103,6 @@ async def update_product(
     token: str = Depends(oauth2_scheme)
 ):
     try:
-        
         async with await db.client.start_session() as s:
             async with s.start_transaction():
                 try:
@@ -104,8 +113,6 @@ async def update_product(
                         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product Not Found.")
                     if product["seller_id"] != seller_id:
                         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this product.")
-                    if not files or len(files) < 1:
-                        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one image file is required.")
 
                     update_data = {}
                     if name:
@@ -116,9 +123,6 @@ async def update_product(
                         update_data["price"] = price
                     if quantity is not None:
                         update_data["quantity"] = quantity
-
-                    if files is None:
-                        return
 
                     if files:
                         image_urls = []
@@ -142,6 +146,7 @@ async def update_product(
                     if not updated_product:
                         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not authorized to update this product or product not found")
 
+                    await log_action("update_product", f"Product {product_id} updated by seller {seller_id}", True)
                     return {
                         "id": str(updated_product["_id"]),
                         "name": updated_product["name"],
@@ -153,15 +158,19 @@ async def update_product(
                         "created_at": updated_product["created_at"]
                     }
 
+                except HTTPException as http_err:
+                    await log_action("update_product", http_err.detail, False)
+                    raise http_err
                 except Exception as e:
-                    print(e)
+                    await log_action("update_product", str(e), False)
+                    await s.abort_transaction()
                     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
+    except HTTPException as http_err:
+        await log_action("update_product", http_err.detail, False)
+        raise http_err
     except Exception as e:
-        await s.abort_transaction()
-        print(e)
+        await log_action("update_product", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
-
-
 
 @router.get("/GetAll")
 async def get_all_products(
@@ -216,31 +225,34 @@ async def get_all_products(
         products = await db["products"].aggregate(pipeline).to_list(length=None)
 
         if not products:
-            return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No products found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No products found")
 
         for product in products:
             product["images"] = [f"{config.PRODUCT_UPLOAD_PATH}/{img}" for img in product["images"]]
             product["id"] = str(product["id"])
 
+        await log_action("get_all_products", "All products retrieved", True)
         return products
 
+    except HTTPException as http_err:
+        await log_action("get_all_products", http_err.detail, False)
+        raise http_err
     except Exception as e:
+        await log_action("get_all_products", str(e), False)
         return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"message": "An error occurred while fetching products.", "error": str(e)})
-
 
 @router.get("/getmineproducts")
 async def get_mine_products(
     token: str = Depends(oauth2_scheme)
 ):
     try:
-        
         seller_id = await SellerAuth(token)
         
         query = {"seller_id": seller_id, "isDeleted": False}
 
         products = await db["products"].find(query).to_list(length=None)
         if not products:
-            return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="You haven't added any products yet!")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="You haven't added any products yet!")
 
         product_responses = []
         for product in products:
@@ -255,19 +267,22 @@ async def get_mine_products(
                 "created_at": product["created_at"]
             }
             product_responses.append(product_response)
-        
+
+        await log_action("get_mine_products", f"Products retrieved for seller {seller_id}", True)
         return product_responses
-    
+
+    except HTTPException as http_err:
+        await log_action("get_mine_products", http_err.detail, False)
+        raise http_err
     except Exception as e:
+        await log_action("get_mine_products", str(e), False)
         return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"message": "An error occurred while fetching products.", "error": str(e)})
-
-
 
 @router.get("/GetProduct/{product_id}")
 async def get_product(product_id: str):
     try:
         pipeline = [
-            {"$match": {"_id": product_id, "isDeleted": False}},  # Match the product by ID and isDeleted flag
+            {"$match": {"_id": ObjectId(product_id), "isDeleted": False}},  # Match the product by ID and isDeleted flag
             {
                 "$lookup": {
                     "from": "users",  # Join with the users collection
@@ -295,19 +310,20 @@ async def get_product(product_id: str):
         product = await db["products"].aggregate(pipeline).to_list(length=1)
 
         if not product:
-            return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
         product = product[0]
         product["images"] = [f"{config.PRODUCT_UPLOAD_PATH}/{img}" for img in product["images"]]
 
+        await log_action("get_product", f"Product {product_id} retrieved", True)
         return product
 
+    except HTTPException as http_err:
+        await log_action("get_product", http_err.detail, False)
+        raise http_err
     except Exception as e:
-        print(e)
+        await log_action("get_product", str(e), False)
         return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
-
 
 @router.delete("/delete/{product_id}")
 async def delete_product(
@@ -315,7 +331,6 @@ async def delete_product(
     token: str = Depends(oauth2_scheme)
 ):
     try:
-        
         async with await db.client.start_session() as s:
             async with s.start_transaction():
                 try:
@@ -331,34 +346,37 @@ async def delete_product(
                         session=s
                     )
                     await db["shopping_carts"].delete_many({"product_id": product_id}, session=s)
-                    
-                    return {"message": "Product moved to bin successfully. You can restore it within 30 days."}
-                
 
+                    await log_action("delete_product", f"Product {product_id} deleted by seller {seller_id}", True)
+                    return {"message": "Product moved to bin successfully. You can restore it within 30 days."}
+
+                except HTTPException as http_err:
+                    await log_action("delete_product", http_err.detail, False)
+                    await s.abort_transaction()
+                    raise http_err
                 except Exception as e:
-                    print(e)
+                    await log_action("delete_product", str(e), False)
                     await s.abort_transaction()
                     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
+    except HTTPException as http_err:
+        await log_action("delete_product", http_err.detail, False)
+        raise http_err
     except Exception as e:
-        await s.abort_transaction()
-        print(e)
+        await log_action("delete_product", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
 
-
-#retreives the seller deleted products 
 @router.get("/getDeleted")
 async def get_deleted_products(
     token: str = Depends(oauth2_scheme)
 ):
     try:
-            
         seller_id = await SellerAuth(token)
         
         query = {"seller_id": seller_id, "isDeleted": True}
-        
+
         products = await db["products"].find(query).to_list(length=None)
         if not products:
-            return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="You haven't deleted any products yet!")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="You haven't deleted any products yet!")
 
         product_responses = []
         for product in products:
@@ -367,19 +385,22 @@ async def get_deleted_products(
                 "name": product["name"],
                 "description": product["description"],
                 "price": product["price"],
-                "quantity":product["quantity"],
+                "quantity": product["quantity"],
                 "isAvailable": product["quantity"] > 0,
                 "images": [f"{config.PRODUCT_UPLOAD_PATH}/{img}" for img in product["images"]],
                 "created_at": product["created_at"]
             }
             product_responses.append(product_response)
-        
+
+        await log_action("get_deleted_products", f"Deleted products retrieved for seller {seller_id}", True)
         return product_responses
+
+    except HTTPException as http_err:
+        await log_action("get_deleted_products", http_err.detail, False)
+        raise http_err
     except Exception as e:
-        print(e)
+        await log_action("get_deleted_products", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
-
-
 
 @router.put("/restore/{product_id}")
 async def restore_product(
@@ -387,24 +408,24 @@ async def restore_product(
     token: str = Depends(oauth2_scheme)
 ):
     try:
-            
         seller_id = await SellerAuth(token)
         product = await db["products"].find_one({"_id": product_id, "seller_id": seller_id, "isDeleted": True})
         if not product:
-            return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to restore this product")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to restore this product")
 
         deleted_time = product["deleted_at"]
         if deleted_time and (datetime.utcnow() - deleted_time) > timedelta(days=30):
-            return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot restore the product. The 30-day restoration period has expired.")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot restore the product. The 30-day restoration period has expired.")
 
         await db["products"].update_one({"_id": product_id}, {"$set": {"isDeleted": False, "deleted_at": None}})
+        await log_action("restore_product", f"Product {product_id} restored by seller {seller_id}", True)
         return {"message": "Product restored successfully."}
+    except HTTPException as http_err:
+        await log_action("restore_product", http_err.detail, False)
+        raise http_err
     except Exception as e:
-        print(e)
+        await log_action("restore_product", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
-
-
-
 
 # Scheduler function to remove products that are deleted for more than 30 days( runs daily at the midnight)
 def remove_old_deleted_products():
@@ -415,7 +436,6 @@ def remove_old_deleted_products():
     except Exception as e:
         print(e)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
-
 
 # Initialize and start the scheduler
 scheduler = BackgroundScheduler()

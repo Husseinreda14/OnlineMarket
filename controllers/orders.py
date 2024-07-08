@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from fastapi.security import OAuth2PasswordBearer
 from jinja2 import Template
 from auth import BuyerAuth, SellerAuth, UserAuth
-from models import ShoppingCart, Product, Order, Payment, User
+from models import ShoppingCart, Product, Order, Payment, User, Log
 from db import db
 import config
 import stripe
@@ -16,13 +16,17 @@ stripe.api_key = config.STRIPE_SECRET_KEY
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
+# Helper function to log actions
+async def log_action(action: str, message: str, success: bool):
+    log = Log(action=action, message=message, success=success)
+    await db["logs"].insert_one(log.dict(by_alias=True))
+
 @router.post("/create-payment")
 async def create_payment(
     request: Request,
     token: str = Depends(oauth2_scheme)
 ):
     try:
-            
         body = await request.json()
         payment_method = body.get("payment_method")
         if payment_method not in ["payment_intent", "payment_link"]:
@@ -114,25 +118,26 @@ async def create_payment(
         )
         await db["payments"].insert_one(payment.dict(by_alias=True))
 
+        await log_action("create_payment", f"Payment created for user {user_id}", True)
         return {"paymentUrl": payment_url}
 
+    except HTTPException as http_err:
+        await log_action("create_payment", http_err.detail, False)
+        raise http_err
     except Exception as e:
-        print(e)
+        await log_action("create_payment", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
-
-
-
 
 @router.get("/getmyOrders")
 async def get_my_orders(
-token: str = Depends(oauth2_scheme)
+    token: str = Depends(oauth2_scheme)
 ):
     try:
         user = await UserAuth(token)
-        userEmailType="Seller"
-        query = {"status": "confirmed"}
+        userEmailType = "Seller"
+        query = {"status": {"$in": ["confirmed", "delivered"]}}  # Include confirmed or delivered orders
         if user['is_seller']:
-            userEmailType="Buyer"
+            userEmailType = "Buyer"
             query["seller_id"] = user['_id']
         else:
             query["user_id"] = user['_id']
@@ -207,7 +212,6 @@ token: str = Depends(oauth2_scheme)
                 }
             }
         ]
- 
 
         orders = await db["orders"].aggregate(pipeline).to_list(length=None)
         
@@ -224,7 +228,7 @@ token: str = Depends(oauth2_scheme)
                 "status": order["status"],
                 "created_at": order["created_at"],
                 "updated_at": order["updated_at"],
-                f"{userEmailType} email":order['email'],
+                f"{userEmailType} email": order['email'],
                 "products": []
             }
             for item in order["products"]:
@@ -237,12 +241,15 @@ token: str = Depends(oauth2_scheme)
                         "price": product["price"]
                     })
             result.append(order_data)
-        
-        return result
-    except Exception as e:
-        print(e)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
 
+        await log_action("get_my_orders", f"Orders retrieved for user {user['_id']}", True)
+        return result
+    except HTTPException as http_err:
+        await log_action("get_my_orders", http_err.detail, False)
+        raise http_err
+    except Exception as e:
+        await log_action("get_my_orders", str(e), False)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
 
 @router.get("/getOrderById/{order_id}")
 async def get_order_by_id(
@@ -251,10 +258,10 @@ async def get_order_by_id(
 ):
     try:
         user = await UserAuth(token)
-        userEmailType = "Buyer"
-        query = {"_id":order_id, "status": "confirmed"}
+        userEmailType = "Seller"
+        query = {"_id": order_id}
         if user['is_seller']:
-            userEmailType = "Seller"
+            userEmailType = "Buyer"
             query["seller_id"] = user['_id']
         else:
             query["user_id"] = user['_id']
@@ -356,12 +363,14 @@ async def get_order_by_id(
                     "price": product["price"]
                 })
 
+        await log_action("get_order_by_id", f"Order {order_id} retrieved for user {user['_id']}", True)
         return order_data
-    
+    except HTTPException as http_err:
+        await log_action("get_order_by_id", http_err.detail, False)
+        raise http_err
     except Exception as e:
-        print(e)
+        await log_action("get_order_by_id", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
-
 
 @router.put("/setOrderStatusToDelivered/{order_id}")
 async def set_order_status_to_delivered(
@@ -380,7 +389,7 @@ async def set_order_status_to_delivered(
                 if not order:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found or you are not authorized to update this order")
 
-                buyer = await db["users"].find_one({"_id":order["user_id"]}, session=s)
+                buyer = await db["users"].find_one({"_id": order["user_id"]}, session=s)
                 if not buyer:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Buyer not found")
 
@@ -394,11 +403,14 @@ async def set_order_status_to_delivered(
                 # Send email to buyer on behalf of seller
                 send_delivery_notification_email(buyer["email"], user["email"])
 
+                await log_action("set_order_status_to_delivered", f"Order {order_id} status updated to delivered by seller {user['_id']}", True)
                 return {"message": "Order status updated to delivered and email sent to buyer"}
 
-
+    except HTTPException as http_err:
+        await log_action("set_order_status_to_delivered", http_err.detail, False)
+        raise http_err
     except Exception as e:
-        print(e)
+        await log_action("set_order_status_to_delivered", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
 
 @router.get("/payment_form")
@@ -406,39 +418,51 @@ async def serve_payment_form(
     client_secret: str = Query(...),
     success_url: str = Query(...)
 ):
-    html_content = get_payment_form_html(client_secret=client_secret, stripe_public_key=config.STRIPE_PUBLIC_KEY, success_url=success_url)
-    return HTMLResponse(content=html_content)
+    try:
+        html_content = get_payment_form_html(client_secret=client_secret, stripe_public_key=config.STRIPE_PUBLIC_KEY, success_url=success_url)
+        await log_action("serve_payment_form", "Payment form served", True)
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        await log_action("serve_payment_form", str(e), False)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
 
 async def update_order_status(payment_id: str, status: str):
-    orders = await db["orders"].find({"payment_id": payment_id, "status": "pending"}).to_list(length=None)
-    for order in orders:
-        await db["orders"].update_one(
-            {"_id": order["_id"]},
-            {"$set": {"status": status}}
-        )
+    try:
+        orders = await db["orders"].find({"payment_id": payment_id, "status": "pending"}).to_list(length=None)
+        for order in orders:
+            await db["orders"].update_one(
+                {"_id": order["_id"]},
+                {"$set": {"status": status}}
+            )
+        await log_action("update_order_status", f"Order status updated for payment {payment_id} to {status}", True)
+    except Exception as e:
+        await log_action("update_order_status", str(e), False)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
 
 async def get_total_order_items(payment_id: str, user_email: str):
     total_order_items = []
     total_price = 0  # Initialize total_price here
-    orders = await db["orders"].find({"payment_id": payment_id}).to_list(length=None)
-    for order in orders:
-        items = []
-        for item in order["products"]:
-            product = await db["products"].find_one({"_id": item["product_id"]})
-            items.append({
-                "quantity": item["quantity"],
-                "product_name": product["name"],
-                "product_price": product["price"]
-            })
-            total_price += item["quantity"] * product["price"]  # Update total_price for each product
-            print(total_price)
-        seller = await db["users"].find_one({"_id": order["seller_id"]})
-        seller_total = sum(item["quantity"] * item["product_price"] for item in items)
-        send_seller_notification_email(seller["email"], user_email, items, seller_total)
-        total_order_items.extend(items)
-    return total_order_items, total_price  
-
-
+    try:
+        orders = await db["orders"].find({"payment_id": payment_id}).to_list(length=None)
+        for order in orders:
+            items = []
+            for item in order["products"]:
+                product = await db["products"].find_one({"_id": item["product_id"]})
+                items.append({
+                    "quantity": item["quantity"],
+                    "product_name": product["name"],
+                    "product_price": product["price"]
+                })
+                total_price += item["quantity"] * product["price"]  # Update total_price for each product
+            seller = await db["users"].find_one({"_id": order["seller_id"]})
+            seller_total = sum(item["quantity"] * item["product_price"] for item in items)
+            send_seller_notification_email(seller["email"], user_email, items, seller_total)
+            total_order_items.extend(items)
+        await log_action("get_total_order_items", f"Total order items and price calculated for payment {payment_id}", True)
+        return total_order_items, total_price
+    except Exception as e:
+        await log_action("get_total_order_items", str(e), False)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
 
 @router.get("/confirm-payment", response_class=HTMLResponse)
 async def confirm_payment(
@@ -453,7 +477,6 @@ async def confirm_payment(
         user = await db["users"].find_one({"_id": user_id})
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
 
         if payment["payment_method"] == "payment_intent":
             intent = stripe.PaymentIntent.retrieve(payment_id)
@@ -479,7 +502,7 @@ async def confirm_payment(
                 send_order_confirmation_email(user["email"], total_order_items, total_price)
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payment not completed")
-        await db["shopping_carts"].delete_many({"user_id":user_id})    
+        await db["shopping_carts"].delete_many({"user_id": user_id})    
         html_template = '''
         <!DOCTYPE html>
         <html>
@@ -500,8 +523,12 @@ async def confirm_payment(
         '''
         template = Template(html_template)
         html_content = template.render(items=total_order_items, total_price=total_price)
+        await log_action("confirm_payment", f"Payment {payment_id} confirmed for user {user_id}", True)
         return HTMLResponse(content=html_content)
 
+    except HTTPException as http_err:
+        await log_action("confirm_payment", http_err.detail, False)
+        raise http_err
     except Exception as e:
-        print(e)
+        await log_action("confirm_payment", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
