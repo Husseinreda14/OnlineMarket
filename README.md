@@ -487,3 +487,9 @@ and happy testing you will find all the apis there
 ## Logging
 
 - All actions, including successful operations and errors, are logged in the `logs` collection in MongoDB. This allows you to view API logs in the portal for monitoring and debugging purposes.
+
+### Export Logs
+
+- **Endpoint:** `/auth/export-logs`
+- **Description:** Exports the logs as a CSV file.
+- **Response:** Returns a CSV file containing the logs.
