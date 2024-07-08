@@ -1,6 +1,8 @@
+import csv
+import io
 from bson import ObjectId
 from fastapi import Depends, APIRouter, HTTPException, Request, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from passlib.context import CryptContext
 from jose import JWTError, jwt
@@ -128,6 +130,37 @@ async def log_action(action: str, message: str, success: bool):
     log = Log(action=action, message=message, success=success)
     await db["logs"].insert_one(log.dict(by_alias=True))
 
+
+@router.get("/export-logs")
+async def export_logs():
+    try:
+        logs_cursor = db["logs"].find()
+        logs = await logs_cursor.to_list(length=None)
+        
+        if not logs:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No logs found")
+
+        # Prepare CSV in memory
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # Write headers
+        headers = ["action", "message", "success", "timestamp"]
+        writer.writerow(headers)
+
+        # Write log rows
+        for log in logs:
+            writer.writerow([log.get("action"), 
+                             log.get("message"),
+                             log.get("success"),              
+                             log.get("timestamp").strftime("%Y-%m-%d %H:%M:%S") if log.get("timestamp") else ""])
+
+        output.seek(0)
+        return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=logs.csv"})
+
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
+
 @router.post("/register")
 async def register(request: Request):
     try:
@@ -183,41 +216,8 @@ async def register(request: Request):
         await log_action("register", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
 
-@router.get("/verify-email", response_class=HTMLResponse)
-async def verify_email(token: str):
-    try:
-        if await is_token_blacklisted(token):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token")
 
-        payload = jwt.decode(token, config.SECRET_KEY, algorithms=[config.ALGORITHM])
-        email = payload.get("email")
-        if email is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token")
-        
-        await db["users"].update_one({"email": email}, {"$set": {"verified": True}})
-        await blacklist_token(token)
-        
-        html_content = """
-        <html>
-            <head>
-                <title>Email Verified</title>
-            </head>
-            <body>
-                <h1>Email Verified Successfully!</h1>
-                <p>You can now login to your account!</p>
-            </body>
-        </html>
-        """
-        await log_action("verify_email", f"User {email} verified email", True)
-        return HTMLResponse(content=html_content, status_code=status.HTTP_200_OK)
-    except HTTPException as http_err:
-        await log_action("verify_email", http_err.detail, False)
-        raise http_err
-    except Exception as e:
-        await log_action("verify_email", str(e), False)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
-    
-    
+   
 @router.post("/login")
 async def login_for_access_token(request: Request):
     try:
@@ -256,6 +256,43 @@ async def login_for_access_token(request: Request):
     except Exception as e:
         await log_action("login", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
+
+
+@router.get("/verify-email", response_class=HTMLResponse)
+async def verify_email(token: str):
+    try:
+        if await is_token_blacklisted(token):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token")
+
+        payload = jwt.decode(token, config.SECRET_KEY, algorithms=[config.ALGORITHM])
+        email = payload.get("email")
+        if email is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token")
+        
+        await db["users"].update_one({"email": email}, {"$set": {"verified": True}})
+        await blacklist_token(token)
+        
+        html_content = """
+        <html>
+            <head>
+                <title>Email Verified</title>
+            </head>
+            <body>
+                <h1>Email Verified Successfully!</h1>
+                <p>You can now login to your account!</p>
+            </body>
+        </html>
+        """
+        await log_action("verify_email", f"User {email} verified email", True)
+        return HTMLResponse(content=html_content, status_code=status.HTTP_200_OK)
+    except HTTPException as http_err:
+        await log_action("verify_email", http_err.detail, False)
+        raise http_err
+    except Exception as e:
+        await log_action("verify_email", str(e), False)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
+    
+ 
 
 @router.post("/forgot-password")
 async def forgot_password(request: Request):
