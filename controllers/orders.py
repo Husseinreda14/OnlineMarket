@@ -464,6 +464,8 @@ async def get_total_order_items(payment_id: str, user_email: str):
         await log_action("get_total_order_items", str(e), False)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
 
+
+
 @router.get("/confirm-payment", response_class=HTMLResponse)
 async def confirm_payment(
     payment_id: str = Query(...)
@@ -488,6 +490,8 @@ async def confirm_payment(
                 )
                 total_order_items, total_price = await get_total_order_items(payment_id, user["email"])  # Unpack both values
                 send_order_confirmation_email(user["email"], total_order_items, total_price)
+                stripe.PaymentIntent.modify(payment_id, metadata={"status": "confirmed"})
+
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payment not completed")
         elif payment["payment_method"] == "payment_link":
@@ -500,6 +504,7 @@ async def confirm_payment(
                 )
                 total_order_items, total_price = await get_total_order_items(payment_id, user["email"])  # Unpack both values
                 send_order_confirmation_email(user["email"], total_order_items, total_price)
+                stripe.PaymentLink.modify(payment_id, active=False)           
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payment not completed")
         await db["shopping_carts"].delete_many({"user_id": user_id})    

@@ -196,6 +196,8 @@ def send_delivery_notification_email(to_email: str, seller_email: str):
     session.sendmail(sender_address, receiver_address, text)
     session.quit()
     print('Delivery notification email sent')
+    
+    
 def get_payment_form_html(client_secret: str, success_url: str, stripe_public_key: str) -> str:
     html_template = '''
     <!DOCTYPE html>
@@ -278,7 +280,7 @@ def get_payment_form_html(client_secret: str, success_url: str, stripe_public_ke
                     }
                 }).then(function(result) {
                     if (result.error) {
-                        console.log(result.error.message);
+  alert(result.error.message); 
                     } else {
                         if (result.paymentIntent.status === 'succeeded') {
                             window.location.href = '{{ success_url }}';
