@@ -24,7 +24,7 @@ Additionally, a log model is included to view API logs in the portal. The projec
 
 
 
-3. To start testing the APIs, use the Postman collection URL available in `config.py`.
+3. To start testing the APIs, use the Postman collection URL available in config.py. Import the Postman collection locally on your desktop to begin testing the APIs.
 
 ### Configuration
 
@@ -37,7 +37,7 @@ Additionally, a log model is included to view API logs in the portal. The projec
 2. Alternatively, you can use the following login credentials:
 
    **For Seller:**
-   - Email: hussein.reda@allegiancetek.com
+   - Email: husseinreda@gmail.com
    - Password: P@ssw0rd
 
    **For Buyer:**
@@ -98,7 +98,7 @@ and happy testing you will find all the apis there
   ```json
   {
       "access_token": "string",
-      "token_type": "bearer"
+      "message": "welcome back"
   }
   ```
 

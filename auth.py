@@ -7,7 +7,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ValidationError
 from models import BlacklistedToken, Log, User
 from db import db
 import config
@@ -214,7 +214,7 @@ async def register(request: Request):
         raise http_err
     except Exception as e:
         await log_action("register", str(e), False)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Something Went Wrong!")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
    
@@ -249,7 +249,7 @@ async def login_for_access_token(request: Request):
             data={"sub": user.id, "isSeller": user.is_seller}, expires_delta=access_token_expires
         )
         await log_action("login", f"User {email} logged in", True)
-        return {"access_token": access_token, "token_type": "bearer"}
+        return {"access_token": access_token, "message": "Welcome Back!"}
     except HTTPException as http_err:
         await log_action("login", http_err.detail, False)
         raise http_err

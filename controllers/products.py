@@ -282,7 +282,7 @@ async def get_mine_products(
 async def get_product(product_id: str):
     try:
         pipeline = [
-            {"$match": {"_id": ObjectId(product_id), "isDeleted": False}},  # Match the product by ID and isDeleted flag
+            {"$match": {"_id": product_id, "isDeleted": False}},  # Match the product by ID and isDeleted flag
             {
                 "$lookup": {
                     "from": "users",  # Join with the users collection
